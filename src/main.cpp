@@ -125,7 +125,7 @@ void angleTotargetRPM(float linearVelocity, float base_RPM, float targetAngle) {
     vRight = linearVelocity + (base_RPM/60*wheel_perimeter);
     vLeft  = linearVelocity - (base_RPM/60*wheel_perimeter);
   } 
-  else if (targetAngle < 358 && targetAngle >= 181) {
+  else if (targetAngle < -2.0 && targetAngle >= -179.0) {
     // 180-360 度：右轉
     vRight = linearVelocity - (base_RPM/60*wheel_perimeter);
     vLeft  = linearVelocity + (base_RPM/60*wheel_perimeter);
@@ -232,6 +232,7 @@ void loop() {
 
     rightPower = constrain(rightPower, 0, 255);
     leftPower = constrain(leftPower, 0, 255);
+
 
     analogWrite(ENA, (pid[1].targetRPM == 0) ? 0 : (int)rightPower);
     analogWrite(ENB, (pid[0].targetRPM == 0) ? 0 : (int)leftPower);
