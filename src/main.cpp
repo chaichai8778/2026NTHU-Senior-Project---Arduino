@@ -125,7 +125,7 @@ void angleTotargetRPM(float linearVelocity, float base_RPM, float targetAngle) {
     vRight = linearVelocity + (base_RPM/60*wheel_perimeter);
     vLeft  = linearVelocity - (base_RPM/60*wheel_perimeter);
   } 
-  else if (targetAngle < -2.0 && targetAngle >= -179.0) {
+  else if (targetAngle < 358 && targetAngle >= 181) {
     // 180-360 度：右轉
     vRight = linearVelocity - (base_RPM/60*wheel_perimeter);
     vLeft  = linearVelocity + (base_RPM/60*wheel_perimeter);
@@ -175,7 +175,7 @@ void loop() {
     Serial.print("remainingAngle:");
     Serial.println(remainingAngle);
 
-    if (remainingAngle > 2.0 && remainingAngle <= 179.0 || remainingAngle < -2.0 && remainingAngle >= -179.0) {
+    if (remainingAngle > 2.0 && remainingAngle <= 179.0 || remainingAngle < 358 && remainingAngle >= 181) {
         angleTotargetRPM(Base_linerVelocity, Base_RPM, remainingAngle);
     } else {
         pid[0].targetRPM = 0;
