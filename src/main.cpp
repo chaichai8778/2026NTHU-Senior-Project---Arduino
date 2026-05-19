@@ -1,14 +1,11 @@
 #include <Arduino.h> 
 #include <math.h>
 //input
-float targetangle = 80; // 目標角度 (360度)
+float GLOBAL_TARGET_ANGLE = 300; // 目標角度 (360度)
+float totalAngleError;
 
 //PID 參數
-int Base_power = 52;                // 基礎輸出功率
-float Base_RPM = 25;                // 基礎轉速
-float Base_linerVelocity = 0.1;     // 線速度 (m/s)
-float rtargetRPM = 50;   // 右目標轉速
-float ltargetRPM = 0;    // 左目標轉速
+int Base_power = 57;                // 基礎輸出功率
 float leftPower = 0;   
 float rightPower = 0;  
 float current_rightRPM = 0;   // 實際右輪轉速
@@ -29,9 +26,9 @@ struct PIDParams {
 };
 
 // PID陣列：0左輪, 1右輪
-PIDParams pid[2] = {
-    {0.4, 0.55, 0.5, 0, 0, 0},  // 左輪 (lKp, lKi, lKd, lTargetRPM, lintegralError, lLastError)
-    {0.4, 0.55, 0.6, 0, 0, 0}  // 右輪 (rKp, rKi, rKd, rTargetRPM, rintegralError, rLastError)
+PIDParams anglePid[2] = {
+    {0.25, 0.018, 0.24, 0, 0, 0},  // 左輪 (lKp, lKi, lKd, lTargetRPM, lintegralError, lLastError)
+    {0.33, 0.018, 0.24, 0, 0, 0}  // 右輪 (rKp, rKi, rKd, rTargetRPM, rintegralError, rLastError)
 };
 
 //右輪
@@ -82,6 +79,29 @@ void dolencoder() {
   }
 }
 
+void setMotorDirection(float rTarget, float lTarget) {
+  // 右輪
+  digitalWrite(IN1, (rTarget >= 0) ? LOW : HIGH);
+  digitalWrite(IN2, (rTarget >= 0) ? HIGH : LOW);
+  
+  // 左輪
+  digitalWrite(IN3, (lTarget >= 0) ? LOW : HIGH);
+  digitalWrite(IN4, (lTarget >= 0) ? HIGH : LOW);
+}
+
+float turnedAngle(float milage[2],float wheel_base) {
+  // 轉過的角度 = acos(1-0.5*pow((里程差), 2)/pow(車輪距離, 2)) * (180.0 / 3.14159)
+  double turned_angle = 0;
+  if (milage[0] > milage[1]) {
+    turned_angle = acos(1-0.5*pow((milage[0]-milage[1]), 2)/pow(wheel_base, 2))*180/M_PI; // 如果左輪里程大於右輪里程，則將左輪里程設為0，避免計算出負角度
+  }
+  else {
+    turned_angle = acos(1-0.5*pow((milage[1]-milage[0]), 2)/pow(wheel_base, 2))*180/M_PI; // 如果右輪里程大於左輪里程，則將右輪里程設為0，避免計算出負角度
+  }
+
+  return turned_angle;
+}
+
 void setup() {
   rCount=0;
   lCount=0;
@@ -99,143 +119,99 @@ void setup() {
   pinMode(IN3, OUTPUT);
   pinMode(IN4, OUTPUT);
 
-  Serial.begin(115200);
+  Serial.begin(9600);
   attachInterrupt(digitalPinToInterrupt(rencoderPinA), doRencoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(lencoderPinA), dolencoder, CHANGE);
 }
 
-void setMotorDirection(float rTarget, float lTarget) {
-  // 右輪
-  digitalWrite(IN1, (rTarget >= 0) ? LOW : HIGH);
-  digitalWrite(IN2, (rTarget >= 0) ? HIGH : LOW);
-  
-  // 左輪
-  digitalWrite(IN3, (lTarget >= 0) ? LOW : HIGH);
-  digitalWrite(IN4, (lTarget >= 0) ? HIGH : LOW);
-}
-
-void angleTotargetRPM(float linearVelocity, float base_RPM, float targetAngle) {
-  float vRight, vLeft;
-
-  float turnOffset = targetAngle * 0.1;
-
-
-  if (targetAngle > 2.0 && targetAngle <= 179.0) {
-    // 0-180 度：左轉
-    vRight = linearVelocity + (base_RPM/60*wheel_perimeter);
-    vLeft  = linearVelocity - (base_RPM/60*wheel_perimeter);
-  } 
-  else if (targetAngle < 358 && targetAngle >= 181) {
-    // 180-360 度：右轉
-    vRight = linearVelocity - (base_RPM/60*wheel_perimeter);
-    vLeft  = linearVelocity + (base_RPM/60*wheel_perimeter);
-  }
-
-  // v to rpm
-
-  pid[1].targetRPM = (vRight / wheel_perimeter) * 60.0 + turnOffset;
-  pid[0].targetRPM  = (vLeft / wheel_perimeter) * 60.0 - turnOffset;
-}
-
-float turnedAngle(float milage[2],float wheel_base) {
-  // 轉過的角度 = acos(1-0.5*pow((里程差), 2)/pow(車輪距離, 2)) * (180.0 / 3.14159)
-  double turned_angle = 0;
-  if (milage[0] > milage[1]) {
-    turned_angle = acos(1-0.5*pow((milage[0]-milage[1]), 2)/pow(wheel_base, 2))*180/M_PI; // 如果左輪里程大於右輪里程，則將左輪里程設為0，避免計算出負角度
-  }
-  else {
-    turned_angle = acos(1-0.5*pow((milage[1]-milage[0]), 2)/pow(wheel_base, 2))*180/M_PI; // 如果右輪里程大於左輪里程，則將右輪里程設為0，避免計算出負角度
-  }
-
-  return turned_angle;
-}
-
 void loop() {
   unsigned long currentTime = millis();
-
   if (currentTime - prevTime >= 100) {
-    Serial.print(currentTime);
-    // 1.100ms 內的脈衝差
-    noInterrupts(); // 讀取時暫时關閉中斷防止數據出錯
+    noInterrupts();
     long currentRCount = rCount;    long currentlCount = lCount;
     interrupts();
     
-    //里程
+    // 1. 計算兩輪的實體里程 (保留正負號)
     milage[0] = (currentlCount / (TOTAL_PPR * 2.0)) * wheel_perimeter;
     milage[1] = (currentRCount / (TOTAL_PPR * 2.0)) * wheel_perimeter;
 
-    float remainingAngle;
-    if (targetangle > 0) {
-      remainingAngle = targetangle - turnedAngle(milage, wheel_base); 
-    }
-    else {
-      remainingAngle = targetangle + turnedAngle(milage, wheel_base); 
-    }
+    // 2. 算出車體目前的「絕對航向角度」
+    float currentHeading = ((milage[0] - milage[1]) / wheel_base) * (180.0 / M_PI);
 
-    Serial.print("remainingAngle:");
-    Serial.println(remainingAngle);
+    // 3. 將當前航向標準化在 0 ~ 360 度空間
+    while (currentHeading < 0.0)   currentHeading += 360.0;
+    while (currentHeading >= 360.0) currentHeading -= 360.0;
 
-    if (remainingAngle > 2.0 && remainingAngle <= 179.0 || remainingAngle < 358 && remainingAngle >= 181) {
-        angleTotargetRPM(Base_linerVelocity, Base_RPM, remainingAngle);
-    } else {
-        pid[0].targetRPM = 0;
-        pid[1].targetRPM = 0;
-    }
+    // 4. 計算總角度誤差（絕對不修改全域變數 GLOBAL_TARGET_ANGLE）
+    float totalAngleError = GLOBAL_TARGET_ANGLE - currentHeading;
 
-    setMotorDirection(pid[1].targetRPM, pid[0].targetRPM);
+    // 5. 【動態追隨核心】自動換算為 -180 ~ +180 之間的最短路徑
+    // 這樣可以保證：
+    // - 當目標在 0~180 時自動左轉，在 180~360 時自動右轉
+    // - 遇到 359度 跳到 1度 這種臨界點時，會絲滑地順向轉過去，絕對不會爆轉大甩頭
+    if (totalAngleError > 180.0)  totalAngleError -= 360.0;
+    if (totalAngleError < -180.0) totalAngleError += 360.0;
 
-    long rdeltaTicks = currentRCount - lastRCount;
-    long ldeltaTicks = currentlCount - lastlCount;
-    lastRCount = currentRCount;
-    lastlCount = currentlCount;
+    Serial.print("Ext_Target: "); Serial.print(GLOBAL_TARGET_ANGLE);
+    Serial.print(" | Current: "); Serial.print(currentHeading);
+    Serial.print(" | Error: "); Serial.println(totalAngleError);
 
-    // 2. 轉速
-    // CHANGE，一圈脈衝數會翻倍 (11 * GEAR_RATIO * 2)
-    float pulsesPerRev = TOTAL_PPR * 2.0; 
-    // RPM = (脈衝差 / 每圈脈衝) * (1分鐘 / 0.1秒)
-    rightRPM = (rdeltaTicks / pulsesPerRev) * 600.0;
-    leftRPM = (ldeltaTicks / pulsesPerRev) * 600.0;
-    current_rightRPM = (rdeltaTicks / pulsesPerRev) * 600.0;
-    current_leftRPM = (ldeltaTicks / pulsesPerRev) * 600.0;
-
-    //P control
-    pid[1].pError = abs(pid[1].targetRPM) - abs(current_rightRPM);
-    pid[0].pError = abs(pid[0].targetRPM) - abs(current_leftRPM);
-
-    //I control
-    pid[1].iError = abs(pid[1].targetRPM) - abs(current_rightRPM); // 累加誤差
-    pid[0].iError = abs(pid[0].targetRPM) - abs(current_leftRPM);  // 累加誤差
-    rintegralError += pid[1].iError; // 累加誤差
-    lintegralError += pid[0].iError; // 累加誤差
-    rintegralError = constrain(rintegralError, -150, 150); 
-    lintegralError = constrain(lintegralError, -150, 150); 
+    float min_ratio = 0.43;         // 最低保留 25% 的控制力道，避免低速卡死
+    float start_decel_angle = 100.0; // 剩餘 50 度以內開始平滑減速
     
-    //D control
-    pid[1].dError = pid[1].pError - rLastError;
-    pid[0].dError = pid[0].pError - lLastError;
-    rLastError = pid[1].pError;
-    lLastError = pid[0].pError;
+    // 計算歸一化誤差比例
+    float x = abs(totalAngleError) / start_decel_angle;
+    if (x > 1.0) x = 1.0; // 超過 50 度就維持 1.0 原速
 
-    //Power output
-    if (abs(pid[1].targetRPM) < 5) {
-        rightPower = 0;
-        pid[1].iError = 0; // 重置積分
-    } else {
-        rightPower = Base_power + (pid[1].pError * pid[1].kp) + (pid[1].iError * pid[1].ki) + (pid[1].dError * pid[1].kd);
+    // 你的經典餘弦平滑數學式
+    float velocity_factor = min_ratio + (1.0 - min_ratio) * ((1.0 - cos(x * M_PI)) / 2.0);
+
+    // 6. PID 核心計算：直接用有正負號的 totalAngleError
+    // --- 右輪 PID ---
+    anglePid[1].pError = totalAngleError; 
+    anglePid[1].iError += anglePid[1].pError;
+    anglePid[1].iError = constrain(anglePid[1].iError, -150, 150); // 限制積分防止暴衝
+    anglePid[1].dError = anglePid[1].pError - rLastError;
+    rLastError = anglePid[1].pError;
+
+    // --- 左輪 PID ---
+    anglePid[0].pError = -totalAngleError; // 與右輪反向，實現原地旋轉/追隨
+    anglePid[0].iError += anglePid[0].pError;
+    anglePid[0].iError = constrain(anglePid[0].iError, -150, 150);
+    anglePid[0].dError = anglePid[0].pError - lLastError;
+    lLastError = anglePid[0].pError;
+
+    
+    // 7. 計算馬達功率輸出 (提醒：外部動態輸入時，kp 建議先從 0.1 ~ 0.3 開始抓感覺)
+    rightPower = ((anglePid[1].pError * anglePid[1].kp) + (anglePid[1].iError * anglePid[1].ki) + (anglePid[1].dError * anglePid[1].kd)) * velocity_factor;
+    leftPower  = ((anglePid[0].pError * anglePid[0].kp) + (anglePid[0].iError * anglePid[0].ki) + (anglePid[0].dError * anglePid[0].kd)) * velocity_factor;
+
+    // 8. 加入死區基底功率，幫助低溫、低電量時克服齒輪箱摩擦力
+    if (rightPower > 1.0)       rightPower += Base_power;
+    else if (rightPower < -1.0) rightPower -= Base_power;
+    else rightPower = 0;
+
+    if (leftPower > 1.0)       leftPower += (Base_power + 20);
+    else if (leftPower < -1.0) leftPower -= (Base_power + 20);
+    else leftPower = 0;
+
+    // 9. 微幅死區平滑控制：當外部輸入非常接近當前角度（誤差小於 1.5 度）
+    // 直接清空積分與輸出，防止馬達在目標點附近發生連續訊號的微小高頻抖動
+    if (abs(totalAngleError) <= 1.5) {
+        rightPower = 0; leftPower = 0;
+        anglePid[1].iError = 0; anglePid[0].iError = 0;
     }
-    if (abs(pid[0].targetRPM) < 5) {
-        leftPower = 0;
-        pid[0].iError = 0; // 重置積分
-    } else {
-        leftPower = Base_power+ 20 + (pid[0].pError * pid[0].kp) + (pid[0].iError * pid[0].ki) + (pid[0].dError * pid[0].kd);
-    }
 
-    rightPower = constrain(rightPower, 0, 255);
-    leftPower = constrain(leftPower, 0, 255);
+    // 10. 實體驅動：動態調整正反轉腳位
+    // 右輪
+    digitalWrite(IN1, (rightPower >= 0) ? LOW : HIGH);
+    digitalWrite(IN2, (rightPower >= 0) ? HIGH : LOW);
+    analogWrite(ENA, constrain(abs((int)rightPower), 0, 255));
 
-
-    analogWrite(ENA, (pid[1].targetRPM == 0) ? 0 : (int)rightPower);
-    analogWrite(ENB, (pid[0].targetRPM == 0) ? 0 : (int)leftPower);
+    // 左輪
+    digitalWrite(IN3, (leftPower >= 0) ? LOW : HIGH);
+    digitalWrite(IN4, (leftPower >= 0) ? HIGH : LOW);
+    analogWrite(ENB, constrain(abs((int)leftPower), 0, 255));
     
     prevTime = currentTime;
   }

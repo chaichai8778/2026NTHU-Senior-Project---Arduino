@@ -9,7 +9,7 @@ float targetAzimuth = 0.0;       // 解析出來的目標角度數字
 int Base_power = 52;                // 基礎輸出功率
 float Base_RPM = 25;                // 基礎轉速
 float Base_linerVelocity = 0.1;     // 線速度 (m/s)
-float rtargetRPM = 50;   // 右目標轉速
+float rtargetRPM = 0;   // 右目標轉速
 float ltargetRPM = 0;    // 左目標轉速
 float leftPower = 0;   
 float rightPower = 0;  
@@ -94,16 +94,6 @@ void setMotorDirection(float rTarget, float lTarget) {
   digitalWrite(IN4, (lTarget >= 0) ? HIGH : LOW);
 }
 
-void setMotorDirection(float rTarget, float lTarget) {
-  // 右輪
-  digitalWrite(IN1, (rTarget >= 0) ? LOW : HIGH);
-  digitalWrite(IN2, (rTarget >= 0) ? HIGH : LOW);
-  
-  // 左輪
-  digitalWrite(IN3, (lTarget >= 0) ? LOW : HIGH);
-  digitalWrite(IN4, (lTarget >= 0) ? HIGH : LOW);
-}
-
 void angleTotargetRPM(float linearVelocity, float base_RPM, float targetAngle) {
   float vRight, vLeft;
 
@@ -115,7 +105,7 @@ void angleTotargetRPM(float linearVelocity, float base_RPM, float targetAngle) {
     vRight = linearVelocity + (base_RPM/60*wheel_perimeter);
     vLeft  = linearVelocity - (base_RPM/60*wheel_perimeter);
   } 
-  else if (targetAngle < -2.0 && targetAngle >= -179.0) {
+  else if (targetAngle < 358 && targetAngle >= 181) {
     // 180-360 度：右轉
     vRight = linearVelocity - (base_RPM/60*wheel_perimeter);
     vLeft  = linearVelocity + (base_RPM/60*wheel_perimeter);
@@ -184,6 +174,7 @@ void setup() {
 }
 
 void loop() {
+  unsigned long currentTime = millis();
   // 2. 呼叫通訊檢查函數
   serialEvent();
 
@@ -197,10 +188,92 @@ void loop() {
       String angleStr = inputString.substring(3);
       targetAzimuth = angleStr.toFloat();
       
-      // 回傳給樹莓派，讓樹莓派終端機顯示 "🤖 Arduino 回應: ACK: 123.4" 
-      // 這能幫你確認兩邊有沒有斷線
-      Serial.print("ACK: ");
-      Serial.println(targetAzimuth);
+    if (currentTime - prevTime >= 100) {
+      Serial.print(currentTime);
+      // 1.100ms 內的脈衝差
+      noInterrupts(); // 讀取時暫时關閉中斷防止數據出錯
+      long currentRCount = rCount;    long currentlCount = lCount;
+      interrupts();
+      
+      //里程
+      milage[0] = (currentlCount / (TOTAL_PPR * 2.0)) * wheel_perimeter;
+      milage[1] = (currentRCount / (TOTAL_PPR * 2.0)) * wheel_perimeter;
+
+      float remainingAngle;
+      if (targetAzimuth > 0) {
+        remainingAngle = targetAzimuth - turnedAngle(milage, wheel_base); 
+      }
+      else {
+        remainingAngle = targetAzimuth + turnedAngle(milage, wheel_base); 
+      }
+
+      Serial.print("remainingAngle:");
+      Serial.println(remainingAngle);
+
+      if ((remainingAngle > 2.0 && remainingAngle <= 179.0 )||(remainingAngle < 358 && remainingAngle >= 181)) {
+          angleTotargetRPM(Base_linerVelocity, Base_RPM, remainingAngle);
+      } else {
+          pid[0].targetRPM = 0;
+          pid[1].targetRPM = 0;
+      }
+
+      setMotorDirection(pid[1].targetRPM, pid[0].targetRPM);
+
+      long rdeltaTicks = currentRCount - lastRCount;
+      long ldeltaTicks = currentlCount - lastlCount;
+      lastRCount = currentRCount;
+      lastlCount = currentlCount;
+
+      // 2. 轉速
+      // CHANGE，一圈脈衝數會翻倍 (11 * GEAR_RATIO * 2)
+      float pulsesPerRev = TOTAL_PPR * 2.0; 
+      // RPM = (脈衝差 / 每圈脈衝) * (1分鐘 / 0.1秒)
+      rightRPM = (rdeltaTicks / pulsesPerRev) * 600.0;
+      leftRPM = (ldeltaTicks / pulsesPerRev) * 600.0;
+      current_rightRPM = (rdeltaTicks / pulsesPerRev) * 600.0;
+      current_leftRPM = (ldeltaTicks / pulsesPerRev) * 600.0;
+
+      //P control
+      pid[1].pError = abs(pid[1].targetRPM) - abs(current_rightRPM);
+      pid[0].pError = abs(pid[0].targetRPM) - abs(current_leftRPM);
+
+      //I control
+      pid[1].iError = abs(pid[1].targetRPM) - abs(current_rightRPM); // 累加誤差
+      pid[0].iError = abs(pid[0].targetRPM) - abs(current_leftRPM);  // 累加誤差
+      rintegralError += pid[1].iError; // 累加誤差
+      lintegralError += pid[0].iError; // 累加誤差
+      rintegralError = constrain(rintegralError, -150, 150); 
+      lintegralError = constrain(lintegralError, -150, 150); 
+      
+      //D control
+      pid[1].dError = pid[1].pError - rLastError;
+      pid[0].dError = pid[0].pError - lLastError;
+      rLastError = pid[1].pError;
+      lLastError = pid[0].pError;
+
+      //Power output
+      if (abs(pid[1].targetRPM) < 5) {
+          rightPower = 0;
+          pid[1].iError = 0; // 重置積分
+      } else {
+          rightPower = Base_power + (pid[1].pError * pid[1].kp) + (pid[1].iError * pid[1].ki) + (pid[1].dError * pid[1].kd);
+      }
+      if (abs(pid[0].targetRPM) < 5) {
+          leftPower = 0;
+          pid[0].iError = 0; // 重置積分
+      } else {
+          leftPower = Base_power+ 20 + (pid[0].pError * pid[0].kp) + (pid[0].iError * pid[0].ki) + (pid[0].dError * pid[0].kd);
+      }
+
+      rightPower = constrain(rightPower, 0, 255);
+      leftPower = constrain(leftPower, 0, 255);
+
+
+      analogWrite(ENA, (pid[1].targetRPM == 0) ? 0 : (int)rightPower);
+      analogWrite(ENB, (pid[0].targetRPM == 0) ? 0 : (int)leftPower);
+      
+      prevTime = currentTime;
+    }
       
       // =======================================================
       // 🎯 在這裡接上你原本「知道角度數字就能自己開車轉向」的程式！
