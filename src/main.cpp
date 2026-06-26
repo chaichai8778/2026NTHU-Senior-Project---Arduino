@@ -1,6 +1,5 @@
 #include <math.h>
 #include <Arduino.h>
-
 String inputString = "";         // string from pi
 bool stringComplete = false;     
 float targetAngle = 0.0;       
