@@ -27,9 +27,9 @@ const int IN2 = 12;  //direction control 2
 const int rencoderPinA = 2; 
 const int rencoderPinB = 8;
 volatile long rCount = 0;   
-long lastRCount = 0;        // 上一次紀錄的脈衝
-unsigned long prevTime = 0; // 上一次計算的時間
-float rightRPM = 0;         // 右輪轉速
+long lastRCount = 0;        
+unsigned long prevTime = 0; 
+float rightRPM = 0;         
 float targetRPM_R = 0;     
 
 //left wheel parameters
@@ -38,9 +38,9 @@ const int IN3 = 11;  //direction control 1
 const int IN4 = 10;  //direction control 2
 const int lencoderPinA = 3;  
 const int lencoderPinB = 7;
-volatile long lCount = 0;   // 左輪總脈衝
-long lastlCount = 0;        // 上一次紀錄的脈衝
-float leftRPM = 0;          // 左輪轉速
+volatile long lCount = 0;   
+long lastlCount = 0;        
+float leftRPM = 0;          
 float targetRPM_L = 0;
 
 //motor parameters
@@ -49,9 +49,9 @@ const int PPR = 11;
 const float TOTAL_PPR = (float)PPR *GEAR_RATIO;
 
 //car parameters
-float wheel_perimeter = 0.069*M_PI;  // 車輪周長 (直徑*3.14159) (m)
-float wheel_base = 0.1975;           // 車輪距離 (m)
-float milage[2] = {0.0, 0.0};        // 里程 (m)[左輪, 右輪]
+float wheel_perimeter = 0.069*M_PI;  
+float wheel_base = 0.1975;           
+float milage[2] = {0.0, 0.0};        //[left, right]
 
 float dt_sec;
 long deltaLcount;
@@ -59,7 +59,7 @@ long deltaRcount;
 
 
 void doRencoder() {
-  if (digitalRead(rencoderPinA) == digitalRead(rencoderPinB)) { // 比較 A, B 相
+  if (digitalRead(rencoderPinA) == digitalRead(rencoderPinB)) { 
     rCount++;
   } else {
     rCount--;
@@ -67,7 +67,7 @@ void doRencoder() {
 }
 
 void dolencoder() {
-  if (digitalRead(lencoderPinA) == digitalRead(lencoderPinB)) { // 比較 A, B 相
+  if (digitalRead(lencoderPinA) == digitalRead(lencoderPinB)) {
     lCount++;
   } else {
     lCount--;
@@ -102,10 +102,8 @@ float turnedAngle(float milage[2],float wheel_base) {
 // when get input from pi, read the input
 void serialEvent() {
   while (Serial.available()) {
-    // 讀取一個新字元
     char inChar = (char)Serial.read();
     
-    // 如果不是換行符號，就一直把它貼在屁股後面接下去
     if (inChar != '\n') {
       inputString += inChar;
     } else {
@@ -117,10 +115,9 @@ void serialEvent() {
 void setup() {
   Serial.begin(115200);
   
-  // 預留 200 個位元組給字串，防止樹莓派狂丟資料時記憶體碎片化
   inputString.reserve(200); 
   
-  //右輪
+  //right wheel
   pinMode(rencoderPinA, INPUT_PULLUP);
   pinMode(rencoderPinB, INPUT_PULLUP);
   pinMode(ENA, OUTPUT);
@@ -128,7 +125,7 @@ void setup() {
   pinMode(IN2, OUTPUT);
   rCount=0;
 
-  //左輪
+  //left wheel
   pinMode(lencoderPinA, INPUT_PULLUP);
   pinMode(lencoderPinB, INPUT_PULLUP);
   pinMode(ENB, OUTPUT);
@@ -214,7 +211,7 @@ void loop() {
     if (target_w != 0) {
       leftPower = (Base_power + abs(targetRPM_L) * 1.5) + dynamic_offset;
       rightPower = Base_power + abs(targetRPM_R) * 1.5;
-      leftPower  = min(max(leftPower, 0), 120);
+      leftPower  = min(max(leftPower, 0), 130);
       rightPower = min(max(rightPower, 0), 120);
     } else {
       leftPower  = 0;
