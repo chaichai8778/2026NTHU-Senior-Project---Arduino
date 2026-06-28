@@ -3,22 +3,24 @@
 String inputString = "";         // string from pi
 bool stringComplete = false;     
 float targetAngle = 0.0;       
-float dynamuctargetAngle = 0.0;
 float target_w = 0.0;        // target "car" angular velocity (rad/s)
+float turned_Angle = 0.0;
 
-
-int Base_power = 52;                
+int Base_power = 68;                
 float Base_RPM = 25;               
 float Base_linerVelocity = 0.1;     
 float leftPower = 0;   
 float rightPower = 0;  
 
 // PID parameters 
-float pid[3] = {0.4, 0, 0};// (lKp, lKi, lKd, lTargetRPM, lintegralError, lLastError)
-float sync_Kp = 0.2; 
-float sync_Ki = 0.0;
-float sync_integral = 0.0;
-float sync_lastError = 0.0;
+float pid[3] = {3.9, 0.02, 0};// (Kp, Ki, Kd)
+float errorAngle = 0;
+float l_pid[3] = {1.8, 0.01, 0};// (lKp, lKi, lKd)
+float r_pid[3] = {1.8, 0.01, 0};// (rKp, rKi, rKd)
+float error_R = 0;
+float error_L = 0;
+float error_R_integral = 0;
+float error_L_integral = 0;
 
 //right wheel parameters
 const int ENA =  5;  //speed control
@@ -49,13 +51,15 @@ const int PPR = 11;
 const float TOTAL_PPR = (float)PPR *GEAR_RATIO;
 
 //car parameters
-float wheel_perimeter = 0.069*M_PI;  
-float wheel_base = 0.1975;           
-float milage[2] = {0.0, 0.0};        //[left, right]
-
+float wheel_perimeter = 0.0675*M_PI;  
+float wheel_base = 0.195;           
+float wheel_radius = 0.0675/2;                
 float dt_sec;
-long deltaLcount;
-long deltaRcount;
+float deltaLcount;
+float deltaRcount;
+float deltaSL;
+float deltaSR;
+
 
 
 void doRencoder() {
@@ -68,19 +72,19 @@ void doRencoder() {
 
 void dolencoder() {
   if (digitalRead(lencoderPinA) == digitalRead(lencoderPinB)) {
-    lCount++;
-  } else {
     lCount--;
+  } else {
+    lCount++;
   }
 }
 
 //target > 0 forward，target < 0 backward
 void setMotorDirection(float rTarget, float lTarget) {
-  // 右輪
+  // right wheel
   digitalWrite(IN1, (rTarget >= 0) ? LOW : HIGH);
   digitalWrite(IN2, (rTarget >= 0) ? HIGH : LOW);
   
-  // 左輪
+  // left wheeldona
   digitalWrite(IN3, (lTarget >= 0) ? LOW : HIGH);
   digitalWrite(IN4, (lTarget >= 0) ? HIGH : LOW);
 }
@@ -88,14 +92,9 @@ void setMotorDirection(float rTarget, float lTarget) {
 
 //turnedAngle(degree) > 0  
 //formula: acos(1-0.5*pow((mileage), 2)/pow(wheel_base, 2)) * (180.0 / pi)
-float turnedAngle(float milage[2],float wheel_base) {
+float turnedAngle(float deltaSL,float deltaSR) {
   double turned_angle = 0;
-  if (milage[0] > milage[1]) {
-    turned_angle = acos(1-0.5*pow((milage[0]-milage[1]), 2)/pow(wheel_base, 2))*180/M_PI; 
-  }
-  else {
-    turned_angle = acos(1-0.5*pow((milage[1]-milage[0]), 2)/pow(wheel_base, 2))*180/M_PI;
-  }
+  turned_angle = (deltaSL - deltaSR) / wheel_base * 180.0 / M_PI;
   return turned_angle;
 }
 
@@ -132,8 +131,8 @@ void setup() {
   pinMode(IN3, OUTPUT);
   pinMode(IN4, OUTPUT);
   lCount=0;
-  attachInterrupt(digitalPinToInterrupt(rencoderPinA), doRencoder, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(lencoderPinA), dolencoder, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(rencoderPinA), doRencoder, RISING);
+  attachInterrupt(digitalPinToInterrupt(lencoderPinA), dolencoder, RISING);
 
 }
 
@@ -151,8 +150,11 @@ void loop() {
 
     dt_sec = (currentTime - prevTime) / 1000.0; //time difference(sec)
 
-    leftRPM  = ((float)deltaLcount / TOTAL_PPR) / dt_sec * 60.0;
-    rightRPM = ((float)deltaRcount / TOTAL_PPR) / dt_sec * 60.0;
+    leftRPM  = (deltaLcount / TOTAL_PPR) / dt_sec * 60.0;
+    rightRPM = (deltaRcount / TOTAL_PPR) / dt_sec * 60.0;
+
+    deltaSL = ((float)deltaLcount / TOTAL_PPR ) * wheel_perimeter;
+    deltaSR = ((float)deltaRcount / TOTAL_PPR ) * wheel_perimeter;
 
     // when a complete string is received, parse it and control the robot
     if (stringComplete) {
@@ -171,57 +173,48 @@ void loop() {
     // reset parameters
     inputString = "";
     stringComplete = false;
-    milage[0] = 0.0;
-    milage[1] = 0.0;
+    turned_Angle = 0.0;
     } 
     
-    //milage, +forward, -backward
-    milage[0] += ((float)deltaLcount / (TOTAL_PPR * 2.0)) * wheel_perimeter;
-    milage[1] += ((float)deltaRcount / (TOTAL_PPR * 2.0)) * wheel_perimeter;
-    
     //-180 < errorAngle < 180
-    float errorAngle;
-    if (targetAngle >= 0) {
-      errorAngle = targetAngle - turnedAngle(milage, wheel_base); 
-    }
-    else {
-      errorAngle = targetAngle + turnedAngle(milage, wheel_base); 
-    }
+    turned_Angle += turnedAngle(deltaSL, deltaSR);
+    errorAngle = targetAngle - turned_Angle; 
 
     //P control
     //sign of "errorAngle" = "sign of target_w"
     if (abs(errorAngle) > 2.0) {
       target_w = pid[0]*errorAngle;
+      target_w = constrain(target_w, -150, 150);
     }
     else {
       target_w = 0;
     }
     
-    float targetRPM_L = target_w * (wheel_base / 2.0) / wheel_perimeter * 60.0;
-    float targetRPM_R = -target_w * (wheel_base / 2.0) / wheel_perimeter * 60.0;
-    setMotorDirection(targetRPM_R, targetRPM_L);
-
-    // speed synchronization PID parameters
-    float sync_error = abs(rightRPM) - abs(leftRPM);
-    sync_integral += sync_error * dt_sec;
-    sync_integral = min(max(sync_integral, -50), 50);
+    targetRPM_L = target_w * wheel_base  / ( wheel_radius * 12 );
+    targetRPM_R = -target_w * wheel_base  / ( wheel_radius * 12 );
     
-    float dynamic_offset = sync_Kp * sync_error + sync_Ki * sync_integral ;
+    error_R = abs(targetRPM_R) - abs(rightRPM);
+    error_L = abs(targetRPM_L) - abs(leftRPM);
+    error_R_integral += error_R * dt_sec;
+    error_L_integral += error_L * dt_sec; 
  
     if (target_w != 0) {
-      leftPower = (Base_power + abs(targetRPM_L) * 1.5) + dynamic_offset;
-      rightPower = Base_power + abs(targetRPM_R) * 1.5;
-      leftPower  = min(max(leftPower, 0), 130);
-      rightPower = min(max(rightPower, 0), 120);
+      setMotorDirection(targetRPM_R, targetRPM_L);
+      leftPower = l_pid[0] * error_L + l_pid[1] * error_L_integral;
+      rightPower = r_pid[0] * error_R + r_pid[1] * error_R_integral;
+      leftPower  = constrain(Base_power + leftPower, 0, 110);
+      rightPower = constrain(Base_power + rightPower, 0, 110);
     } else {
       leftPower  = 0;
       rightPower = 0;
-      sync_integral = 0;
+      error_R_integral = 0;
+      error_L_integral = 0;
     }
 
     analogWrite(ENA, (int)rightPower);
     analogWrite(ENB, (int)leftPower);
-    
+    deltaLcount = 0;
+    deltaRcount = 0;
     prevTime = currentTime;
   }
 }
