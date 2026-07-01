@@ -1,4 +1,4 @@
-# 2026NTHU Senior-Project 
+# 2026NTHU Senior-Project Arduino part
 Differential Drive Motion + Ultrasonic Obstacle Detect
 
 Ultrasonic Sensor : HC-SR04
