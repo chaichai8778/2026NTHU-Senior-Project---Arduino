@@ -1,22 +1,23 @@
 #include <math.h>
 #include <Arduino.h>
-String inputString = "";         // string from pi
-bool stringComplete = false;     
-float targetAngle = 0.0;       
-float target_w = 0.0;        // target "car" angular velocity (rad/s)
-float turned_Angle = 0.0;
 
-int Base_power = 68;                
-float Base_RPM = 25;               
-float Base_linerVelocity = 0.1;     
+float targetAngle = 0;       
+float target_w = 0.0;        // target "car" angular velocity (degree/s)
+float turned_Angle = 0.0;
+float Absolute_Angle = 0.0;
+
+float tagetarray[2] = {90 , -90};
+int counter = 0;
+int counter2 = 0;
+
+int Base_power = 68;                            
 float leftPower = 0;   
 float rightPower = 0;  
 
 // PID parameters 
 float pid[3] = {3.9, 0.02, 0};// (Kp, Ki, Kd)
-float errorAngle = 0;
-float l_pid[3] = {1.8, 0.01, 0};// (lKp, lKi, lKd)
-float r_pid[3] = {1.8, 0.01, 0};// (rKp, rKi, rKd)
+float l_pid[3] = {1.6, 0.015, 0};// (lKp, lKi, lKd)
+float r_pid[3] = {1.6, 0.015, 0};// (rKp, rKi, rKd)
 float error_R = 0;
 float error_L = 0;
 float error_R_integral = 0;
@@ -30,7 +31,6 @@ const int rencoderPinA = 2;
 const int rencoderPinB = 8;
 volatile long rCount = 0;   
 long lastRCount = 0;        
-unsigned long prevTime = 0; 
 float rightRPM = 0;         
 float targetRPM_R = 0;     
 
@@ -53,17 +53,27 @@ const float TOTAL_PPR = (float)PPR *GEAR_RATIO;
 //car parameters
 float wheel_perimeter = 0.0675*M_PI;  
 float wheel_base = 0.195;           
-float wheel_radius = 0.0675/2;                
+float wheel_radius = 0.0675/2;         
+float milage[2] = {0.0, 0.0};        
 float dt_sec;
 float deltaLcount;
 float deltaRcount;
 float deltaSL;
 float deltaSR;
+float prevTime_motor = 0;
 
+//position parameters
+float car_distance = 0.0;
 
+//ultrasonic sensor parameters
+const int trigPin = 9;    
+const int echoPin = 4;   
+float duration = 0;
+float distance = 0; //distance(m)
+float prevtime_sensor = 0;
 
 void doRencoder() {
-  if (digitalRead(rencoderPinA) == digitalRead(rencoderPinB)) { 
+  if (digitalRead(rencoderPinA) == digitalRead(rencoderPinB)) { // 比較 A, B 相
     rCount++;
   } else {
     rCount--;
@@ -71,7 +81,7 @@ void doRencoder() {
 }
 
 void dolencoder() {
-  if (digitalRead(lencoderPinA) == digitalRead(lencoderPinB)) {
+  if (digitalRead(lencoderPinA) == digitalRead(lencoderPinB)) { // 比較 A, B 相
     lCount--;
   } else {
     lCount++;
@@ -84,39 +94,24 @@ void setMotorDirection(float rTarget, float lTarget) {
   digitalWrite(IN1, (rTarget >= 0) ? LOW : HIGH);
   digitalWrite(IN2, (rTarget >= 0) ? HIGH : LOW);
   
-  // left wheeldona
-  digitalWrite(IN3, (lTarget >= 0) ? LOW : HIGH);
-  digitalWrite(IN4, (lTarget >= 0) ? HIGH : LOW);
+  // left wheel
+  digitalWrite(IN3, (lTarget >= 0) ? HIGH : LOW);
+  digitalWrite(IN4, (lTarget >= 0) ? LOW : HIGH);
+
 }
 
-
 //turnedAngle(degree) > 0  
-//formula: acos(1-0.5*pow((mileage), 2)/pow(wheel_base, 2)) * (180.0 / pi)
+//formula: turned_angle = (deltaSL - deltaSR) / wheel_base * 180.0 / M_PI
 float turnedAngle(float deltaSL,float deltaSR) {
   double turned_angle = 0;
   turned_angle = (deltaSL - deltaSR) / wheel_base * 180.0 / M_PI;
   return turned_angle;
 }
 
-// when get input from pi, read the input
-void serialEvent() {
-  while (Serial.available()) {
-    char inChar = (char)Serial.read();
-    
-    if (inChar != '\n') {
-      inputString += inChar;
-    } else {
-      stringComplete = true;
-    }
-  }
-}
-
 void setup() {
   Serial.begin(115200);
   
-  inputString.reserve(200); 
-  
-  //right wheel
+  //右輪
   pinMode(rencoderPinA, INPUT_PULLUP);
   pinMode(rencoderPinB, INPUT_PULLUP);
   pinMode(ENA, OUTPUT);
@@ -124,7 +119,7 @@ void setup() {
   pinMode(IN2, OUTPUT);
   rCount=0;
 
-  //left wheel
+  //左輪
   pinMode(lencoderPinA, INPUT_PULLUP);
   pinMode(lencoderPinB, INPUT_PULLUP);
   pinMode(ENB, OUTPUT);
@@ -132,15 +127,34 @@ void setup() {
   pinMode(IN4, OUTPUT);
   lCount=0;
   attachInterrupt(digitalPinToInterrupt(rencoderPinA), doRencoder, RISING);
-  attachInterrupt(digitalPinToInterrupt(lencoderPinA), dolencoder, RISING);
-
+  attachInterrupt(digitalPinToInterrupt(lencoderPinA), dolencoder, RISING);        
+  pinMode(trigPin, OUTPUT);      
+  pinMode(echoPin, INPUT);   
 }
 
 void loop() {
   unsigned long currentTime = millis();
-  serialEvent();
+  
+  if (currentTime - prevTime_motor >= 15) {
+    //dynamic target angle change every 2 seconds
+    counter++;
+    if (counter % 135 == 0) {
+      counter2++;
+      if (counter2 > 1){
+        counter2 = 0;
+        turned_Angle = 0.0;
+        error_R_integral = 0;
+        error_L_integral = 0;
+        targetAngle = tagetarray[counter2];
+      }
+      else{
+        turned_Angle = 0.0;
+        error_R_integral = 0;
+        error_L_integral = 0;
+        targetAngle = tagetarray[counter2];
+      }
+    }
 
-  if (currentTime - prevTime >= 100) {
     noInterrupts(); 
     deltaLcount = lCount - lastlCount;
     deltaRcount = rCount - lastRCount;
@@ -148,7 +162,7 @@ void loop() {
     lastlCount = lCount;
     interrupts();
 
-    dt_sec = (currentTime - prevTime) / 1000.0; //time difference(sec)
+    dt_sec = (currentTime - prevTime_motor) / 1000.0; //time difference(sec)
 
     leftRPM  = (deltaLcount / TOTAL_PPR) / dt_sec * 60.0;
     rightRPM = (deltaRcount / TOTAL_PPR) / dt_sec * 60.0;
@@ -156,35 +170,17 @@ void loop() {
     deltaSL = ((float)deltaLcount / TOTAL_PPR ) * wheel_perimeter;
     deltaSR = ((float)deltaRcount / TOTAL_PPR ) * wheel_perimeter;
 
-    // when a complete string is received, parse it and control the robot
-    if (stringComplete) {
-      inputString.trim(); 
-      
-      // check if the string starts with "AZ:"
-      if (inputString.startsWith("AZ:")) {
-        String angleStr = inputString.substring(3);
-        targetAngle = angleStr.toFloat();
-
-        //-180 < targetAngle < 180
-        if (targetAngle > 180) {
-          targetAngle = targetAngle - 360; 
-        }
-      }
-    // reset parameters
-    inputString = "";
-    stringComplete = false;
-    turned_Angle = 0.0;
-    } 
-    
     //-180 < errorAngle < 180
+    float errorAngle;
     turned_Angle += turnedAngle(deltaSL, deltaSR);
     errorAngle = targetAngle - turned_Angle; 
+    Absolute_Angle += turnedAngle(deltaSL, deltaSR);
 
     //P control
     //sign of "errorAngle" = "sign of target_w"
     if (abs(errorAngle) > 2.0) {
       target_w = pid[0]*errorAngle;
-      target_w = constrain(target_w, -150, 150);
+      target_w = constrain(target_w, -180, 180);
     }
     else {
       target_w = 0;
@@ -192,17 +188,19 @@ void loop() {
     
     targetRPM_L = target_w * wheel_base  / ( wheel_radius * 12 );
     targetRPM_R = -target_w * wheel_base  / ( wheel_radius * 12 );
-    
+
+    car_distance += (deltaSL + deltaSR) / 2.0;
+
     error_R = abs(targetRPM_R) - abs(rightRPM);
     error_L = abs(targetRPM_L) - abs(leftRPM);
     error_R_integral += error_R * dt_sec;
-    error_L_integral += error_L * dt_sec; 
- 
+    error_L_integral += error_L * dt_sec;
+
     if (target_w != 0) {
       setMotorDirection(targetRPM_R, targetRPM_L);
       leftPower = l_pid[0] * error_L + l_pid[1] * error_L_integral;
       rightPower = r_pid[0] * error_R + r_pid[1] * error_R_integral;
-      leftPower  = constrain(Base_power + leftPower, 0, 110);
+      leftPower  = constrain(Base_power + leftPower, 0, 120);
       rightPower = constrain(Base_power + rightPower, 0, 110);
     } else {
       leftPower  = 0;
@@ -211,10 +209,27 @@ void loop() {
       error_L_integral = 0;
     }
 
+    //Ultrasonic sensor
+    /*distance(m) caculate*/
+    digitalWrite(trigPin, LOW);
+    delayMicroseconds(5);
+    digitalWrite(trigPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trigPin, LOW);
+    pinMode(echoPin, INPUT);
+    duration = pulseIn(echoPin, HIGH);
+    distance = (duration/2) / 29.1; 
+
+    //Serial output
+    Serial.print(distance);    
+    Serial.print(",");
+    Serial.print(Absolute_Angle);
+    Serial.print(",");
+    Serial.println(car_distance);
+
     analogWrite(ENA, (int)rightPower);
     analogWrite(ENB, (int)leftPower);
-    deltaLcount = 0;
-    deltaRcount = 0;
-    prevTime = currentTime;
+    prevTime_motor = currentTime;
+    prevtime_sensor = currentTime;
   }
 }
