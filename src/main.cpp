@@ -4,7 +4,6 @@
 float targetAngle = 0;       
 float target_w = 0.0;        // target "car" angular velocity (degree/s)
 float turned_Angle = 0.0;
-float Absolute_Angle = 0.0;
 
 float tagetarray[2] = {90 , -90};
 int counter = 0;
@@ -62,14 +61,11 @@ float deltaSL;
 float deltaSR;
 float prevTime_motor = 0;
 
-//position parameters
-float car_distance = 0.0;
-
 //ultrasonic sensor parameters
 const int trigPin = 9;    
 const int echoPin = 4;   
 float duration = 0;
-float distance = 0; //distance(m)
+float obs_distance = 0; //obs_distance(m)
 float prevtime_sensor = 0;
 
 void doRencoder() {
@@ -174,7 +170,6 @@ void loop() {
     float errorAngle;
     turned_Angle += turnedAngle(deltaSL, deltaSR);
     errorAngle = targetAngle - turned_Angle; 
-    Absolute_Angle += turnedAngle(deltaSL, deltaSR);
 
     //P control
     //sign of "errorAngle" = "sign of target_w"
@@ -188,8 +183,6 @@ void loop() {
     
     targetRPM_L = target_w * wheel_base  / ( wheel_radius * 12 );
     targetRPM_R = -target_w * wheel_base  / ( wheel_radius * 12 );
-
-    car_distance += (deltaSL + deltaSR) / 2.0;
 
     error_R = abs(targetRPM_R) - abs(rightRPM);
     error_L = abs(targetRPM_L) - abs(leftRPM);
@@ -209,8 +202,30 @@ void loop() {
       error_L_integral = 0;
     }
 
+    static int sensor_trigger_counter = 0;
+    sensor_trigger_counter++;
+    
+    if (sensor_trigger_counter >= 4) {
+      sensor_trigger_counter = 0; 
+      
+      digitalWrite(trigPin, LOW);
+      delayMicroseconds(5);
+      digitalWrite(trigPin, HIGH);
+      delayMicroseconds(10);
+      digitalWrite(trigPin, LOW);
+      pinMode(echoPin, INPUT);
+      
+      duration = pulseIn(echoPin, HIGH, 11600); 
+      
+      if (duration > 0) {
+        obs_distance = (duration / 2.0) / 29.1; 
+      } else {
+        obs_distance = 200.0;
+      }
+    }
+/*
     //Ultrasonic sensor
-    /*distance(m) caculate*/
+    //obs_distance(m) caculate
     digitalWrite(trigPin, LOW);
     delayMicroseconds(5);
     digitalWrite(trigPin, HIGH);
@@ -218,14 +233,15 @@ void loop() {
     digitalWrite(trigPin, LOW);
     pinMode(echoPin, INPUT);
     duration = pulseIn(echoPin, HIGH);
-    distance = (duration/2) / 29.1; 
-
+    pulseIn(echoPin, HIGH, 30000);
+    obs_distance = (duration/2) / 29.1; 
+*/
     //Serial output
-    Serial.print(distance);    
+    Serial.print(obs_distance);    
     Serial.print(",");
-    Serial.print(Absolute_Angle);
+    Serial.print(deltaSL, 6);
     Serial.print(",");
-    Serial.println(car_distance);
+    Serial.println(deltaSR, 6);
 
     analogWrite(ENA, (int)rightPower);
     analogWrite(ENB, (int)leftPower);
