@@ -1,26 +1,36 @@
 #include <math.h>
 #include <Arduino.h>
 
+//input
 float targetAngle = 0;       
+float car_x = 0;
+float car_y = 0;
+float target_x = 0;
+float target_y = 0;
 float target_w = 0.0;        // target "car" angular velocity (degree/s)
+float target_v = 0.0;
 float turned_Angle = 0.0;
 
-float tagetarray[2] = {90 , -90};
+float tagetarray[2] = {90 , 0};
 int counter = 0;
 int counter2 = 0;
 
-int Base_power = 68;                            
+int Base_power = 75;     
+float linear_RPM = 0.0;                       
 float leftPower = 0;   
 float rightPower = 0;  
 
 // PID parameters 
-float pid[3] = {3.9, 0.02, 0};// (Kp, Ki, Kd)
+float pid[3] = {4.3, 0.04, 0};// (Kp, Ki, Kd)
 float l_pid[3] = {1.6, 0.015, 0};// (lKp, lKi, lKd)
 float r_pid[3] = {1.6, 0.015, 0};// (rKp, rKi, rKd)
 float error_R = 0;
 float error_L = 0;
 float error_R_integral = 0;
 float error_L_integral = 0;
+float errorAngle = 0.0;
+float errorAngle_integral = 0.0;
+float errordistance = 0.0;
 
 //right wheel parameters
 const int ENA =  5;  //speed control
@@ -68,8 +78,17 @@ float duration = 0;
 float obs_distance = 0; //obs_distance(m)
 float prevtime_sensor = 0;
 
+//input
+struct __attribute__((packed)) NavigationData {
+  int16_t car_x;
+  int16_t car_y;
+  int16_t target_x;
+  int16_t target_y;
+};
+NavigationData navData;
+
 void doRencoder() {
-  if (digitalRead(rencoderPinA) == digitalRead(rencoderPinB)) { // 比較 A, B 相
+  if (digitalRead(rencoderPinA) == digitalRead(rencoderPinB)) {
     rCount++;
   } else {
     rCount--;
@@ -77,7 +96,7 @@ void doRencoder() {
 }
 
 void dolencoder() {
-  if (digitalRead(lencoderPinA) == digitalRead(lencoderPinB)) { // 比較 A, B 相
+  if (digitalRead(lencoderPinA) == digitalRead(lencoderPinB)) {
     lCount--;
   } else {
     lCount++;
@@ -104,10 +123,27 @@ float turnedAngle(float deltaSL,float deltaSR) {
   return turned_angle;
 }
 
+void error_caculate(){
+  float dx = target_x - car_x;
+  float dy = target_y - car_y;
+  if (dx==0 && dy==0){
+    errordistance = 0;
+    errorAngle = 0;
+  }
+  else{
+    errordistance = sqrt(dx*dx + dy*dy) / 100;
+    targetAngle = -atan2(dy, dx) * 180 / M_PI;
+    errorAngle = targetAngle - turned_Angle; 
+    while (errorAngle > 180.0)  errorAngle -= 360.0;
+    while (errorAngle < -180.0) errorAngle += 360.0;
+  }
+ 
+}
+
 void setup() {
   Serial.begin(115200);
   
-  //右輪
+  //right wheel
   pinMode(rencoderPinA, INPUT_PULLUP);
   pinMode(rencoderPinB, INPUT_PULLUP);
   pinMode(ENA, OUTPUT);
@@ -115,7 +151,7 @@ void setup() {
   pinMode(IN2, OUTPUT);
   rCount=0;
 
-  //左輪
+  //left wheel
   pinMode(lencoderPinA, INPUT_PULLUP);
   pinMode(lencoderPinB, INPUT_PULLUP);
   pinMode(ENB, OUTPUT);
@@ -130,27 +166,60 @@ void setup() {
 
 void loop() {
   unsigned long currentTime = millis();
-  
+  /*f (Serial.available() >= 8) {
+    Serial.readBytes((char*)&navData, 8);
+  }*/
+  if (Serial.available() >= 0) {
+      String inputString = Serial.readStringUntil('\n');
+      inputString.trim();
+      
+      int OneComma  = inputString.indexOf(',');
+      int TwoComma = inputString.indexOf(',', OneComma + 1);
+      int ThrComma  = inputString.indexOf(',', TwoComma + 1);
+
+      if (OneComma == -1 || TwoComma == -1 || ThrComma == -1) {
+        return; 
+      }
+
+      String carXStr   = inputString.substring(0, OneComma);
+      String carYStr   = inputString.substring(OneComma + 1, TwoComma);
+      String targetXStr = inputString.substring(TwoComma + 1, ThrComma);
+      String targetYStr = inputString.substring(ThrComma + 1);
+      
+      if (carXStr.length() == 0 || carYStr.length() == 0 || 
+          targetXStr.length() == 0 || targetYStr.length() == 0) {
+        return;
+      }
+
+      car_x   = carXStr.toFloat();
+      car_y   = carYStr.toFloat();
+      target_x = targetXStr.toFloat();
+      target_y = targetYStr.toFloat();
+        
+  }
+
   if (currentTime - prevTime_motor >= 15) {
     //dynamic target angle change every 2 seconds
+    /*
     counter++;
     if (counter % 135 == 0) {
       counter2++;
       if (counter2 > 1){
         counter2 = 0;
-        turned_Angle = 0.0;
+        //turned_Angle = 0.0;
         error_R_integral = 0;
         error_L_integral = 0;
         targetAngle = tagetarray[counter2];
       }
       else{
-        turned_Angle = 0.0;
+        //turned_Angle = 0.0;
         error_R_integral = 0;
         error_L_integral = 0;
         targetAngle = tagetarray[counter2];
       }
     }
-
+    */
+    
     noInterrupts(); 
     deltaLcount = lCount - lastlCount;
     deltaRcount = rCount - lastRCount;
@@ -166,28 +235,53 @@ void loop() {
     deltaSL = ((float)deltaLcount / TOTAL_PPR ) * wheel_perimeter;
     deltaSR = ((float)deltaRcount / TOTAL_PPR ) * wheel_perimeter;
 
+    error_caculate();
+
     //-180 < errorAngle < 180
-    float errorAngle;
+
     turned_Angle += turnedAngle(deltaSL, deltaSR);
-    errorAngle = targetAngle - turned_Angle; 
+
+    target_v = 1.7 * errordistance;
+    target_v = constrain(target_v, 0.0, 0.24);
+
+    float base_linear_RPM = (target_v / wheel_perimeter) * 60.0;
 
     //P control
     //sign of "errorAngle" = "sign of target_w"
-    if (abs(errorAngle) > 2.0) {
-      target_w = pid[0]*errorAngle;
-      target_w = constrain(target_w, -180, 180);
+    if (abs(errordistance) > 0.02){
+      if (abs(errorAngle) > 2.0) {
+        errorAngle_integral += errorAngle * dt_sec;
+        errorAngle_integral = constrain(errorAngle_integral, -50.0, 50.0);
+        target_w = pid[0]*errorAngle + + pid[1] * errorAngle_integral;;
+        target_w = constrain(target_w, -90, 90);
+        float linear_factor = 1.0 - pow((min(abs(errorAngle), 180.0) / 180.0),2);
+        linear_RPM = base_linear_RPM * linear_factor;
+      }
+      else {
+        target_w = 0;
+        errorAngle_integral = 0;
+        linear_RPM = base_linear_RPM;
+      }
     }
-    else {
+    else
+    {
+      target_v = 0;
       target_w = 0;
+      errorAngle_integral = 0;
     }
     
-    targetRPM_L = target_w * wheel_base  / ( wheel_radius * 12 );
-    targetRPM_R = -target_w * wheel_base  / ( wheel_radius * 12 );
+    
+    float rotate_RPM = target_w * wheel_base / (wheel_radius * 12);
+
+    targetRPM_L = rotate_RPM + linear_RPM;
+    targetRPM_R = -rotate_RPM + linear_RPM;
 
     error_R = abs(targetRPM_R) - abs(rightRPM);
     error_L = abs(targetRPM_L) - abs(leftRPM);
     error_R_integral += error_R * dt_sec;
     error_L_integral += error_L * dt_sec;
+    error_R_integral = constrain(error_R_integral, -50.0, 50.0);
+    error_L_integral = constrain(error_L_integral, -50.0, 50.0);
 
     if (target_w != 0) {
       setMotorDirection(targetRPM_R, targetRPM_L);
